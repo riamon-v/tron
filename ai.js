@@ -18,7 +18,7 @@ const addToMap = ({ x, y }) => MAP[y * SIZE + x] = 1
 
 const snailIt = arr => goRight(arr) || goForward(arr) || goLeft(arr)
 
-const update = ({ ai, ais }) => {
+export const update = ({ ai, ais }) => {
   ais.forEach(setFilled)
 
   const enemyCoordsIndices = ais
