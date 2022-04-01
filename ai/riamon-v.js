@@ -1,62 +1,197 @@
 const SIZE = 100
-const MAP = new Int8Array(SIZE * SIZE) // State of the Map
-const isFree = ({ x, y }) => MAP[y * SIZE + x] === 0 // 0 = block free
-const isOccupied = ({ x, y }) => MAP[y * SIZE + x] === 1 // 1 = block occupied
-const isMe = ai => ai.me // is true if this AI is you
+const MAX = SIZE * SIZE
+const MAP = new Uint8Array(MAX)
+const [FREE, OCCUPIED, FILLER, PREDICTION] = MAP.keys()
 
-// `inBounds` check if our coord (n) is an existing index in our MAP
+/// AI CODE
 const inBounds = n => n < SIZE && n >= 0
-
-// `isInBounds` check that properties x and y of our argument are both in bounds
 const isInBounds = ({ x, y }) => inBounds(x) && inBounds(y)
+const addToMap = ({ x, y }) => MAP[x * SIZE + y] = OCCUPIED
+const isFree = ({ x, y }) => MAP[x * SIZE + y] === FREE
+const isOccupied = ({ x, y }) => MAP[x * SIZE + y] === OCCUPIED
 
-// `pickRandom` get a random element from an array
-const pickRandom = arr => arr[Math.floor(Math.random() * arr.length)]
+const pref = [ 1, 2, 0, -1 ]
+const calcArea = (mask = new Set) => {
+  const scoreMap = new Uint16Array(MAX)
+  const areas = new Map()
 
-// `addToMap` save the new positions into the map
-const addToMap = ({ x, y }) => MAP[y * SIZE + x] = 1
+  let i = -1
+  let areaIndex
+  while (++i < MAX) {
+    if (MAP[i] || mask.has(i)) {
+      areaIndex = undefined
+      continue
+    }
+    const topArea = areas.get(scoreMap[i - SIZE])
+    if (areaIndex) {
+      const area = areas.get(areaIndex)
+      area.total++
+      if (topArea && (topArea !== area)) {
+        topArea.total += area.total
+        if (area.indexes) {
+          topArea.indexes = (topArea.indexes || []).concat(area.indexes)
+        }
+        (topArea.indexes || (topArea.indexes = [])).push(area.i)
+        for (const index of topArea.indexes) {
+          areas.set(index, topArea)
+        }
+        areaIndex = topArea.i
+      }
+    } else if (topArea) {
+      areaIndex = topArea.i
+      topArea.total++
+    } else {
+      areaIndex = areas.size + 1
+      areas.set(areaIndex, { total: 1, i: areaIndex })
+    }
+    scoreMap[i] = areaIndex
+    if (((i + 1) % SIZE) === 0) {
+      areaIndex = undefined
+    }
+  }
+  return { scoreMap, areas }
+}
 
-const snailIt = arr => goRight(arr) || goForward(arr) || goLeft(arr)
+const NO_AREA = { i: -1, total: 0 }
+const nexter = [
+  ({ x, y }) => ({ x, y: y - 1 }),
+  ({ x, y }) => ({ x: x + 1, y }),
+  ({ x, y }) => ({ x, y: y + 1 }),
+  ({ x, y }) => ({ x: x - 1, y }),
+]
+const guessNext = coord => nexter[coord.cardinal](coord)
+const addCoordToSet = (set, coord) => set.add(coord.index)
+const addGuessToSet = (set, coord) => set
+  .add(coord.index)
+  .add(toIndex(guessNext(coord)))
 
-// `update` this function is called at each turn
-const update = state => {
-  // update is called with a state argument that has 3 properties:
-  //   ais: an array of all the AIs
-  //   ai: the current AI
+const genCountMap = (aiCoords, otherAIsCoords) => {
+  const { scoreMap, areas } = calcArea()
 
-  // Each AIs contains:
-  //   color: A number that represent the color of a AI
-  //   name: A string of the AI name
-  //   coords: An array of 4 coordinates of the nearest blocks
+  // Flag AIs area
+  for (const coord of aiCoords) {
+    (areas.get(scoreMap[coord.index]) || NO_AREA).keep = true
+  }
 
-  // Each coordinate (and AI) contains:
-  //   x: The horizontal position
-  //   y: The vertical position
-  //   index: The computed index of the coord (x * 100 + y)
-  //   cardinal: A number between 0 and 3 that represent the cardinal
-  //     [ 0: NORTH, 1: EAST, 2: SOUTH, 3: WEST ]
-  //        N
-  //     W  +  E
-  //        S
-  //
-  //   direction: A number between 0 and 3 that represent the direction
-  //     [ 0: FORWARD, 1: RIGHT, 2: BACKWARD, 3: LEFT ]
+  // Fill the empty spots so they are ignored later on
+  let i = -1
+  while (++i < MAX) {
+    if (MAP[i]) continue
+    const area = areas.get(scoreMap[i])
+    area && !area.keep && (MAP[i] = FILLER)
+  }
 
-  // note that AIs initial cardinal is random (depending on the seed)
-  // your AI cardinal is the way you are facing
+  const planA = calcArea(otherAIsCoords.reduce(addCoordToSet, new Set))
+  const planB = calcArea(otherAIsCoords.reduce(addGuessToSet, new Set))
 
-  // Saving state between each updates:
-  // I update the MAP with the new position of each AIs
-  console.log(state)
-  state.ais.forEach(addToMap)
+  // set ai areas
+  const aiAreas = new Set
+  for (const coord of aiCoords) {
+    const area = areas.get(scoreMap[coord.index]) || NO_AREA
+    const planATotal = (planA.areas.get(planA.scoreMap[coord.index]) || NO_AREA).total
+    const planBTotal = (planB.areas.get(planB.scoreMap[coord.index]) || NO_AREA).total
+    coord.score = area.total + (planATotal * 3) + planBTotal // test for rate
+    coord.areaIndex = area.i
+    aiAreas.add(area)
+  }
 
-  // Actual AI logic:
-  // I filter my array of coords to keep only those that are in bounds
-  const coordsInBound = state.ai.coords.filter(isInBounds)
+  for (const coord of otherAIsCoords) {
+    coord.areaIndex = (areas.get(scoreMap[coord.index]) || NO_AREA).i
+  }
 
-  // I filter again to keep coords that are free
-  const available = coordsInBound.filter(isFree)
+  return [ ...aiAreas ]
+}
 
-  // And I return a random available coord
-  return pickRandom(available)
+const flatten = (a, b) => a.concat(b)
+const toIndex = ({ x, y }) => x * SIZE + y
+const getPossibleMovesFrom = ({ x, y }) => [
+  { x, y: y + 1 },
+  { x, y: y - 1 },
+  { x: x + 1, y },
+  { x: x - 1, y },
+].filter(isInBounds).filter(isFree)
+const addIndex = p => p.index = toIndex(p)
+const byDist = (a, b) => b.dist - a.dist
+const dist = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y)
+const update = ({ ais, ai }) => {
+  ais.forEach(addToMap)
+  const possibleCoords = ai.coords
+    .filter(isInBounds)
+    .filter(isFree)
+
+  const otherAIs = ais.filter(p => p !== ai)
+  const otherAIsCoords = otherAIs
+    .map(p => p.coords)
+    .reduce(flatten, [])
+    .filter(isInBounds)
+    .filter(isFree)
+
+  ais.forEach(addIndex)
+  possibleCoords.forEach(addIndex)
+  otherAIsCoords.forEach(addIndex)
+
+  const aiAreas = genCountMap(possibleCoords, otherAIsCoords)
+  const aiAreasIndex = aiAreas.map(pa => pa.i)
+  const maxValue = possibleCoords.reduce((a, b) => ({ score: Math.max(a.score, b.score) }), { score: 0 }).score
+  possibleCoords.forEach(coord => coord.ratio = coord.score / maxValue)
+
+  const otherAIsInSameArea = otherAIs
+    .filter(p => p.coords.some(c => aiAreasIndex.includes(c.areaIndex)))
+
+  otherAIsInSameArea
+    .map(p => p.dist = dist(p, ai))
+    .sort(byDist)
+
+  const nearestAI = otherAIsInSameArea[0] || ai
+  const farthestAI = otherAIsInSameArea[otherAIsInSameArea.length - 1] || ai
+  // console.timeout('ai in area count', otherAIsInSameArea.length)
+  // console.timeout('nearestAI', nearestAI.name, nearestAI.dist)
+  possibleCoords.forEach(coord =>
+    coord.nearestDist = dist(nearestAI, coord))
+
+  // console.timeout({ maxValue })
+  // console.timeout(possibleCoords)
+
+  possibleCoords.sort((a, b) =>
+    (b.score - a.score)
+      || a.nearestDist - b.nearestDist
+      || (pref[b.direction] - pref[a.direction]))
+
+  if (!otherAIsInSameArea.length) return possibleCoords[0]
+
+  // remove shitty moves (ratio lower than .33)
+  const suckLessCoords = possibleCoords
+    .filter(coord => coord.ratio > 0.33)
+
+  // A position is risky if another ai can move on it next turn
+  const otherAIsCoordsIndex = otherAIsCoords.map(toIndex)
+  const unsafe = suckLessCoords
+    .filter(coord => !otherAIsCoordsIndex.includes(coord.index))
+
+  // TODO: aggressive mode
+  // - Find nearest ai
+  // - Rush toward him
+
+  // TODO: passive mode
+  // - Find nearest ai
+  // - Avoid him
+
+  // TODO: better check for "safe" spots:
+  // - Check for tunnels
+  // - find the end of the tunnel
+  // - find if a ai can fill the gap before I can get out
+
+  // TODO: better fill (if lone survivor)
+  // - Check if move will block empty space
+  // - fill space without being blocked
+
+  // TODO: win condition
+  // - Check if we can isolate a majority or blocks
+  // - Then just do that and fill
+
+  const safe = unsafe
+    .filter(coord => getPossibleMovesFrom(coord)
+      .filter(coord => toIndex(coord) !== ai.index).length > 1)
+
+  return safe[0] || unsafe[0] || possibleCoords[0]
 }
