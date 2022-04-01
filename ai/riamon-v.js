@@ -18,30 +18,8 @@ const addToMap = ({ x, y }) => MAP[y * SIZE + x] = 1
 
 const snailIt = arr => goRight(arr) || goForward(arr) || goLeft(arr)
 
-export const update = ({ ai, ais }) => {
-  ais.forEach(setFilled)
-
-  const enemyCoordsIndices = ais
-    .filter(isOtherAI)
-    .filter(isAlive)
-    .flatMap(ai => ai.coords)
-    .map(coord => coord.index)
-
-  const possibleCoords = ai.coords
-    .filter(isInBounds)
-    .filter(isFree)
-
-  const safeCoords = possibleCoords.filter(c => !enemyCoordsIndices.includes(c.index))
-
-  const coordsInBound = ai.coords
-    .filter(isInBounds)
-    .filter(isNotBackward)
-
-  return snailIt(safeCoords) || snailIt(possibleCoords)
-}
-
 // `update` this function is called at each turn
-const update2 = state => {
+const update = state => {
   // update is called with a state argument that has 3 properties:
   //   ais: an array of all the AIs
   //   ai: the current AI
